@@ -1,27 +1,58 @@
 import asyncio
 import websockets
 import json
-import os
 from datetime import datetime
 
-PORT = int(os.environ.get("PORT", 9000))
 HOST = "0.0.0.0"
+PORT = 9000
 
 async def ocpp_handler(websocket):
+    # ✅ compatível com Render
     path = websocket.path
-    charger_id = path.strip("/") or "Desconhecido"
-
-    print(f"\n⚡ [CONEXÃO] Carregador: {charger_id}")
+    charger_id = path.strip("/") or "Carregador_Desconhecido"
+    
+    print(f"\n⚡ [CONEXÃO] ID: {charger_id}")
 
     try:
         async for message in websocket:
-            print(f"📥 [{charger_id}]: {message}")
-            await websocket.send(json.dumps([3, "123", {}]))
+            print(f"\n📥 [{charger_id}]: {message}")
+            
+            try:
+                msg = json.loads(message)
+
+                if isinstance(msg, list) and len(msg) >= 3:
+                    msg_id = msg[1]
+                    action = msg[2]
+                    payload = msg[3] if len(msg) > 3 else {}
+
+                    now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+                    if action == "BootNotification":
+                        response = [3, msg_id, {
+                            "status": "Accepted",
+                            "currentTime": now,
+                            "interval": 60
+                        }]
+
+                    elif action == "Authorize":
+                        response = [3, msg_id, {
+                            "idTagInfo": {"status": "Accepted"}
+                        }]
+
+                    else:
+                        response = [3, msg_id, {}]
+
+                    await websocket.send(json.dumps(response))
+                    print(f"📤 Resposta enviada ({action})")
+
+            except Exception as e:
+                print(f"💥 Erro ao processar: {e}")
+
     except Exception as e:
-        print(f"🔌 [SAIU] {charger_id}: {e}")
+        print(f"🔌 Desconectado: {e}")
 
 async def main():
-    print(f"🚀 INICIANDO SERVIDOR NA PORTA {PORT}...")
+    print("🚀 Servidor online (Render ready)")
 
     async with websockets.serve(
         ocpp_handler,
@@ -30,5 +61,4 @@ async def main():
     ):
         await asyncio.Future()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())

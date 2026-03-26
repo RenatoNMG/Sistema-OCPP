@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import json
 from datetime import datetime
 from websockets import serve
 
@@ -29,16 +30,32 @@ class ChargePoint(cp):
             current_time=datetime.utcnow().isoformat()
         )
 
+async def send_welcome_message(websocket, cp_id):
+    """
+    Envia uma mensagem de teste (JSON) assim que o app conecta.
+    Isso ajuda a confirmar no log do celular que o servidor respondeu.
+    """
+    welcome_payload = [
+        3, # MessageType: CallResult (Resposta)
+        "00000", # UniqueID
+        {"message": f"Conectado com sucesso ao Servidor Render! ID: {cp_id}", "status": "Online"}
+    ]
+    await websocket.send(json.dumps(welcome_payload))
+    logger.info(f"Mensagem de boas-vindas enviada para {cp_id}")
+
 async def on_connect(websocket, path):
-    """
-    Gerencia novas conexões WebSocket.
-    """
-    # Extrai o ID do carregador da URL (ex: wss://url.com/NOME_DO_CARREGADOR)
+    # Extrai o ID do carregador da URL
     charge_point_id = path.strip('/')
     if not charge_point_id:
-        charge_point_id = "unknown_device"
+        charge_point_id = "Desconhecido"
 
-    logger.info(f"Nova conexão: {charge_point_id}")
+    logger.info(f"Tentativa de conexão: {charge_point_id}")
+
+    # Envia o teste inicial para o app
+    try:
+        await send_welcome_message(websocket, charge_point_id)
+    except Exception as e:
+        logger.error(f"Erro ao enviar boas-vindas: {e}")
 
     cp_instance = ChargePoint(charge_point_id, websocket)
 
@@ -50,16 +67,20 @@ async def on_connect(websocket, path):
         logger.info(f"Conexão encerrada para: {charge_point_id}")
 
 async def main():
-    # O Render exige o uso da variável de ambiente PORT
     port = int(os.environ.get("PORT", 9000))
     
-    # "0.0.0.0" permite conexões externas
-    async with serve(on_connect, "0.0.0.0", port, subprotocols=['ocpp2.0.1']):
-        logger.info(f"Servidor OCPP 2.0.1 rodando na porta {port}")
-        await asyncio.Future()  # Mantém o loop rodando infinitamente
+    # ADICIONADO: ocpp1.6 na lista de subprotocols para evitar o erro 400 Bad Request
+    async with serve(
+        on_connect, 
+        "0.0.0.0", 
+        port, 
+        subprotocols=['ocpp1.6', 'ocpp2.0.1']
+    ):
+        logger.info(f"Servidor iniciado. Escutando na porta {port}")
+        await asyncio.Future()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Servidor finalizado manualmente.")
+        logger.info("Servidor finalizado.")

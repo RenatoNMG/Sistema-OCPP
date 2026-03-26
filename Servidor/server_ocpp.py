@@ -1,105 +1,87 @@
 import asyncio
 import websockets
 import json
-import os
 from datetime import datetime
 
-# ==============================
-# Configurações de rede
-# ==============================
-HOST = "0.0.0.0"
-PORT = int(os.environ.get("PORT", 9000))  # Render exige porta dinâmica
+# Configurações de Rede
+HOST = "0.0.0.0" 
+PORT = 9000
 
-# ==============================
-# Função que trata cada conexão
-# ==============================
 async def ocpp_handler(websocket):
-    # Pega o ID do carregador a partir do path da URL
+    """
+    Função que gerencia a conexão com o carregador.
+    Nas versões novas do websockets, ela recebe apenas o objeto 'websocket'.
+    """
+    # Obtendo o ID do carregador a partir da URL (path)
     path = websocket.request.path
     charger_id = path.strip("/") or "Carregador_Desconhecido"
-
+    
     print(f"\n⚡ [CONEXÃO] Carregador conectado! ID: {charger_id}")
 
     try:
         async for message in websocket:
-            print(f"\n📥 [{charger_id} RECEBIDO]: {message}")
-
+            print(f"\n📥 [RECEBIDO de {charger_id}]: {message}")
+            
             try:
-                # Tenta interpretar como JSON
+                # O OCPP envia um array: [MessageTypeId, MessageId, Action, Payload]
                 msg = json.loads(message)
+                
+                # Verifica se é um formato de lista válido do OCPP
+                if isinstance(msg, list) and len(msg) >= 3:
+                    msg_type = msg[0]
+                    msg_id = msg[1]
+                    action = msg[2]
+                    payload = msg[3] if len(msg) > 3 else {}
 
-                # Valida se é uma lista OCPP mínima
-                if not isinstance(msg, list) or len(msg) < 3:
-                    print("⚠️ Mensagem fora do padrão OCPP")
-                    await websocket.send("Erro: Formato OCPP inválido")
-                    continue
+                    now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
 
-                # Extrai campos principais
-                msg_type = msg[0]
-                msg_id = msg[1]
-                action = msg[2]
-                payload = msg[3] if len(msg) > 3 else {}
+                    # --- RESPOSTA PARA BOOT NOTIFICATION ---
+                    if action == "BootNotification":
+                        response = [3, msg_id, {
+                            "status": "Accepted",
+                            "currentTime": now,
+                            "interval": 60
+                        }]
+                        await websocket.send(json.dumps(response))
+                        print(f"📤 [RESPOSTA]: BootNotification Aceito para {charger_id}")
 
-                now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+                    # --- RESPOSTA PARA AUTHORIZE ---
+                    elif action == "Authorize":
+                        # Aceita qualquer TAG para teste
+                        response = [3, msg_id, {
+                            "idTagInfo": {"status": "Accepted"}
+                        }]
+                        await websocket.send(json.dumps(response))
+                        print(f"📤 [RESPOSTA]: Autorização Aceita para a Tag: {payload.get('idTag')}")
 
-                # ===== RESPONDE BootNotification =====
-                if action == "BootNotification":
-                    response = [3, msg_id, {
-                        "status": "Accepted",
-                        "currentTime": now,
-                        "interval": 60
-                    }]
-                    await websocket.send(json.dumps(response))
-                    print(f"📤 [RESPOSTA] BootNotification enviada")
-
-                # ===== RESPONDE Authorize =====
-                elif action == "Authorize":
-                    response = [3, msg_id, {
-                        "idTagInfo": {"status": "Accepted"}
-                    }]
-                    await websocket.send(json.dumps(response))
-                    print(f"📤 [RESPOSTA] Authorize enviada para idTag={payload.get('idTag')}")
-
-                # ===== OUTRAS AÇÕES (Heartbeat, Status, etc) =====
+                    # --- RESPOSTA PARA OUTRAS AÇÕES (Heartbeat, Status, etc) ---
+                    else:
+                        response = [3, msg_id, {}]
+                        await websocket.send(json.dumps(response))
+                        print(f"📤 [RESPOSTA]: Mensagem '{action}' processada.")
+                
                 else:
-                    response = [3, msg_id, {}]
-                    await websocket.send(json.dumps(response))
-                    print(f"📤 [RESPOSTA] Mensagem '{action}' processada")
+                    print("⚠️ Mensagem não segue o padrão OCPP [ID, Tipo, Ação, Dados].")
+                    await websocket.send("Erro: Formato OCPP inválido.")
 
             except json.JSONDecodeError:
-                # Mensagem não é JSON
-                print("❌ Mensagem recebida não é JSON")
-                await websocket.send("Erro: JSON inválido")
-                continue
-
+                print("❌ Erro: O que o carregador enviou não é um JSON válido.")
             except Exception as e:
-                # Qualquer outro erro não derruba a conexão
-                print(f"💥 Erro interno ao processar mensagem: {e}")
-                await websocket.send("Erro interno")
-                continue
+                print(f"💥 Erro interno ao processar: {e}")
 
     except websockets.exceptions.ConnectionClosed:
-        print(f"🔌 [DESCONECTADO] Carregador {charger_id} saiu")
-    except Exception as e:
-        print(f"💥 Erro de conexão: {e}")
+        print(f"🔌 [DESCONECTADO] O carregador {charger_id} saiu.")
 
-
-# ==============================
-# Inicia servidor
-# ==============================
 async def main():
-    print(f"🚀 Servidor OCPP rodando na porta {PORT}")
-    print(f"📢 Endereço para conexão: ws://[SEU_DOMÍNIO]/ID_DO_CARREGADOR")
-    print("📍 Aguardando conexões...")
-
+    print(f"🚀 SERVIDOR OCPP ONLINE")
+    print(f"📍 Endereço para o carregador: ws://[SEU_IP]:{PORT}/NOME_DO_CARREGADOR")
+    print(f"📢 Ouvindo em todas as interfaces (0.0.0.0)...")
+    
     async with websockets.serve(ocpp_handler, HOST, PORT):
-        await asyncio.Future()  # Mantém o servidor rodando
+        await asyncio.Future()  # Mantém o servidor rodando para sempre
 
-# ==============================
-# Entrypoint
-# ==============================
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n🛑 Servidor parado pelo usuário")
+        print("\n🛑 Servidor parado pelo usuário.")
